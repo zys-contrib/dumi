@@ -96,9 +96,9 @@ describe('mobile theme', () => {
     match: { params: {}, isExact: true, path: '/', url: '/' },
     route: { routes: baseCtx.routes },
   };
-  const originalOffsetTop = Object.getOwnPropertyDescriptor(
+  const originalGetBoundingClientRect = Object.getOwnPropertyDescriptor(
     window.HTMLElement.prototype,
-    'offsetTop',
+    'getBoundingClientRect',
   );
   const originalOffsetHeight = Object.getOwnPropertyDescriptor(
     window.HTMLElement.prototype,
@@ -126,7 +126,7 @@ describe('mobile theme', () => {
 
   afterAll(() => {
     Object.defineProperties(window.HTMLElement.prototype, {
-      offsetTop: originalOffsetTop,
+      getBoundingClientRect: originalGetBoundingClientRect,
       offsetHeight: originalOffsetHeight,
     });
   });
