@@ -6,16 +6,20 @@ import {
   VERSION_2_LEVEL_NAV,
 } from '@/constants';
 import type { IApi } from '@/types';
+import { isVersionInRange } from '@/utils';
 import { parseModule } from '@umijs/bundler-utils';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import hostedGit from 'hosted-git-info';
 import path from 'path';
-import { deepmerge, lodash, resolve, semver, winPath } from 'umi/plugin-utils';
+import { deepmerge, lodash, resolve, winPath } from 'umi/plugin-utils';
 import { safeExcludeInMFSU } from '../derivative';
 import loadTheme, { IThemeLoadResult } from './loader';
 
 const DEFAULT_THEME_PATH = path.join(__dirname, '../../../theme-default');
+const DEFAULT_LOADING_PATH = winPath(
+  path.resolve(__dirname, '../../client/pages/Loading'),
+);
 
 /**
  * get pkg theme name
@@ -86,7 +90,7 @@ function checkMinor2ByPkg(pkg: IApi['pkg']) {
   const ver =
     pkg.peerDependencies?.dumi || pkg.devDependencies?.dumi || '^2.0.0';
 
-  return semver.subset(ver, VERSION_2_LEVEL_NAV);
+  return isVersionInRange(ver, VERSION_2_LEVEL_NAV);
 }
 
 export default (api: IApi) => {
@@ -213,12 +217,14 @@ export default (api: IApi) => {
       path.resolve(__dirname, '../../client/theme-api'),
     );
 
-    // set automatic edit link
+    // set automatic edit link/source link
     // why not use default config?
-    // because true value should be transformed to automatic edit link
+    // because true value should be transformed to automatic edit link.
+    // and if link is a string template, there is no need to automatically generate it.
     const repoUrl = api.pkg.repository?.url || api.pkg.repository;
-
-    if (memo.themeConfig?.editLink !== false && typeof repoUrl === 'string') {
+    const autoEditLink = (memo.themeConfig?.editLink ?? true) === true;
+    const autoSourceLink = (memo.themeConfig?.sourceLink ?? true) === true;
+    if ((autoEditLink || autoSourceLink) && typeof repoUrl === 'string') {
       const hostedGitIns = hostedGit.fromUrl(repoUrl);
       let branch = '';
 
@@ -234,39 +240,40 @@ export default (api: IApi) => {
 
       if (hostedGitIns) {
         memo.themeConfig ??= {};
-        // @ts-ignore
-        memo.themeConfig.editLink = `${hostedGitIns.edit(
-          `${api.pkg.repository.directory || ''}/{filename}`,
-          { committish: branch },
-        )}`;
+        const directory = api.pkg.repository.directory || '';
+        if (autoSourceLink) {
+          let anchorPrefix = 'L';
+          if (hostedGitIns.type.includes('bitbucket')) {
+            anchorPrefix = 'lines-';
+          }
+          const sourceLinkTemplate = hostedGitIns.browse(
+            `${directory}/{fileName}#${anchorPrefix}{line}`,
+            { committish: branch },
+          );
+          memo.themeConfig.sourceLink = sourceLinkTemplate;
+        }
+
+        if (autoEditLink) {
+          // @ts-ignore
+          memo.themeConfig.editLink = `${hostedGitIns.edit(
+            `${directory}/{filename}`,
+            { committish: branch },
+          )}`;
+        }
       }
     }
-
-    return memo;
-  });
-
-  // set dark mode selector as less variable
-  // why not use `theme` or `modifyVars`?
-  // because `theme` will be override by `modifyVars` in umi
-  // and `modifyVar` will override `theme` from user
-  api.chainWebpack((memo) => {
-    const lessRule = memo.module.rule('less');
-
-    ['css', 'css-modules'].forEach((rule) => {
-      Object.values(lessRule.oneOf(rule).uses.entries()).forEach((loader) => {
-        if (loader.get('loader').includes('less-loader')) {
-          loader.tap((opts) => {
-            opts.lessOptions.modifyVars ??= {};
-            opts.lessOptions.modifyVars[
-              'dark-selector'
-            ] = `~'[${PREFERS_COLOR_ATTR}="dark"]'`;
-
-            return opts;
-          });
-        }
-      });
-    });
-
+    if (memo.theme) {
+      memo.theme['dark-selector'] = `~'[${PREFERS_COLOR_ATTR}="dark"]'`;
+    } else if (memo.lessLoader) {
+      memo.lessLoader.lessOptions.modifyVars ??= {};
+      memo.lessLoader.lessOptions.modifyVars[
+        'dark-selector'
+      ] = `~'[${PREFERS_COLOR_ATTR}="dark"]'`;
+    } else {
+      memo.theme = {
+        'dark-selector': `~'[${PREFERS_COLOR_ATTR}="dark"]'`,
+      };
+    }
     return memo;
   });
 
@@ -274,7 +281,7 @@ export default (api: IApi) => {
     // execute before umi tmpFiles plugin
     stage: -Infinity,
     fn() {
-      const { globalLoading } = api.appData;
+      const { globalLoading = DEFAULT_LOADING_PATH } = api.appData;
       const enableNProgress = !!api.config.themeConfig.nprogress;
 
       // replace original loading component data
@@ -292,12 +299,8 @@ export default (api: IApi) => {
               )}';
 import './nprogress.css';`
             : ''
-        }${
-          globalLoading
-            ? `
-import UserLoading from '${globalLoading}';`
-            : ''
         }
+import UserLoading from '${globalLoading}';
 import React, { useLayoutEffect, type FC } from 'react';
 import { useSiteData } from 'dumi';
 
@@ -322,7 +325,7 @@ const DumiLoading: FC = () => {
     }
   }, []);
 
-  return ${globalLoading ? '<UserLoading />' : 'null'};
+  return <UserLoading />
 }
 
 export default DumiLoading;
@@ -374,68 +377,31 @@ export default DumiLoading;
     api.writeTmpFile({
       noPluginDir: true,
       path: 'dumi/theme/ContextWrapper.tsx',
-      content: `import React, { useState, useEffect, useRef } from 'react';
-import { useOutlet, history } from 'dumi';
-import { SiteContext } from '${winPath(
-        require.resolve('../../client/theme-api/context'),
-      )}';
-import { demos, components } from '../meta';
-import { locales } from '../locales/config';${
-        hasDefaultExport
-          ? `\nimport entryDefaultExport from '${winPath(entryFile!)}';`
-          : ''
-      }${
-        hasNamedExport
-          ? `\nimport * as entryMemberExports from '${winPath(entryFile!)}';`
-          : ''
-      }
-
-const entryExports = {
-  ${hasDefaultExport ? 'default: entryDefaultExport,' : ''}
-  ${hasNamedExport ? '...entryMemberExports,' : ''}
-};
-
-export default function DumiContextWrapper() {
-  const outlet = useOutlet();
-  const [loading, setLoading] = useState(false);
-  const prev = useRef(history.location.pathname);
-
-  useEffect(() => {
-    return history.listen((next) => {
-      if (next.location.pathname !== prev.current) {
-        prev.current = next.location.pathname;
-
-        // scroll to top when route changed
-        document.documentElement.scrollTo(0, 0);
-      }
-    });
-  }, []);
-
-  return (
-    <SiteContext.Provider value={{
-      pkg: ${JSON.stringify(
-        lodash.pick(api.pkg, ...Object.keys(PICKED_PKG_FIELDS)),
-      )},
-      historyType: "${api.config.history?.type || 'browser'}",
-      entryExports,
-      demos,
-      components,
-      locales,
-      loading,
-      setLoading,
-      hostname: ${JSON.stringify(api.config.sitemap?.hostname)},
-      themeConfig: ${JSON.stringify(
-        Object.assign(
-          lodash.pick(api.config, 'logo', 'description', 'title'),
-          api.config.themeConfig,
+      tplPath: require.resolve('../../templates/ContextWrapper.ts.tpl'),
+      context: {
+        contextPath: winPath(require.resolve('../../client/theme-api/context')),
+        defaultExport: hasDefaultExport
+          ? `import entryDefaultExport from '${winPath(entryFile!)}';`
+          : '',
+        namedExport: hasNamedExport
+          ? `import * as entryMemberExports from '${winPath(entryFile!)}';`
+          : '',
+        hasDefaultExport,
+        hasNamedExport,
+        pkg: JSON.stringify(
+          lodash.pick(api.pkg, ...Object.keys(PICKED_PKG_FIELDS)),
         ),
-      )},
-      _2_level_nav_available: ${api.appData._2LevelNavAvailable},
-    }}>
-      {outlet}
-    </SiteContext.Provider>
-  );
-}`,
+        historyType: api.config.history?.type || 'browser',
+        hostname: String(JSON.stringify(api.config.sitemap?.hostname)),
+        themeConfig: JSON.stringify(
+          Object.assign(
+            lodash.pick(api.config, 'logo', 'description', 'title'),
+            api.config.themeConfig,
+          ),
+        ),
+        rc_util: winPath(path.dirname(require.resolve('rc-util/package'))),
+        _2_level_nav_available: api.appData._2LevelNavAvailable,
+      },
     });
 
     const primaryColor =
@@ -515,15 +481,15 @@ export default function DumiContextWrapper() {
     const { prefersColor } = api.config.themeConfig;
 
     if (prefersColor.switch === false && prefersColor.default !== 'auto') {
-      return `document.documentElement.setAttribute('${PREFERS_COLOR_ATTR}', '${prefersColor.default}');`;
+      return `typeof document !== 'undefined' && document.documentElement.setAttribute('${PREFERS_COLOR_ATTR}', '${prefersColor.default}');`;
     }
 
     return `(function () {
   var cache = typeof navigator !== 'undefined' && navigator.cookieEnabled && typeof window.localStorage !== 'undefined' && localStorage.getItem('dumi:prefers-color') || '${prefersColor.default}';
-  var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var isDark = typeof window !== 'undefined' &&  window.matchMedia('(prefers-color-scheme: dark)').matches;
   var enums = ['light', 'dark', 'auto'];
 
-  document.documentElement.setAttribute(
+  typeof document !== 'undefined' && document.documentElement.setAttribute(
     '${PREFERS_COLOR_ATTR}',
     cache === enums[2]
       ? (isDark ? enums[1] : enums[0])

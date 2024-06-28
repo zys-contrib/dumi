@@ -172,6 +172,7 @@ features:
     <li>
       src
       <ul>
+        <li>directory <ul></ul></li>
         <li>index.md</li>
       </ul>
     </li>
@@ -187,6 +188,7 @@ features:
     <li>
       src
       <ul>
+        <li>directory <ul></ul></li>
         <li>index.md</li>
       </ul>
     </li>
@@ -203,6 +205,11 @@ features:
       src
 +     <small>这是 src 文件夹</small>
       <ul>
+        <li>
+          directory
++         <small>没有子项的文件夹</small>
+          <ul></ul>
+        </li>
         <li>
           index.md
 +         <small>这是 index.md</small>
@@ -226,6 +233,11 @@ features:
       <small>这是 src 文件夹</small>
       <ul>
         <li>
+          directory
+          <small>没有子项的文件夹</small>
+          <ul></ul>
+        </li>
+        <li>
           index.md
           <small>这是 index.md</small>
         </li>
@@ -237,3 +249,66 @@ features:
     </li>
   </ul>
 </Tree>
+
+## CodeGroup <Badge>2.3.0+</Badge>
+
+需要将多代码块合并成一个分组进行展示时，可以使用 CodeGroup 语法，例如：
+
+```jsx
+/**
+ * inline: true
+ */
+import SourceCode from 'dumi/theme/builtins/SourceCode';
+const content = `
+:::code-group
+
+\`\`\`bash [npm]
+npm install -D dumi
+\`\`\`
+
+\`\`\`bash [yarn]
+yarn add -D dumi
+\`\`\`
+
+\`\`\`bash [pnpm]
+pnpm add -D dumi
+\`\`\`
+
+\`\`\`ts [.dumirc.ts] {3}
+import { defineConfig } from 'dumi';
+
+export default defineConfig({
+  // ...
+});
+\`\`\`
+:::
+`.trim();
+
+export default () => <SourceCode lang="markdown">{content}</SourceCode>;
+```
+
+将会被渲染为：
+
+:::code-group
+
+```bash [npm]
+npm install -D dumi
+```
+
+```bash [yarn]
+yarn add -D dumi
+```
+
+```bash [pnpm]
+pnpm add -D dumi
+```
+
+```ts [.dumirc.ts] {3}
+import { defineConfig } from 'dumi';
+
+export default defineConfig({
+  // ...
+});
+```
+
+:::

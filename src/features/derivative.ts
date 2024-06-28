@@ -82,8 +82,10 @@ export default (api: IApi) => {
     }
 
     assert(
-      !api.config.ssr || api.config.ssr.builder === 'webpack',
-      'Only `webpack` builder is supported in SSR mode!',
+      !api.config.ssr ||
+        api.config.ssr.builder === 'webpack' ||
+        api.config.ssr.builder === 'mako',
+      'Only `webpack` and mako` builder is supported in SSR mode!',
     );
     assert(
       api.config.cssLoader?.modules === undefined &&
@@ -175,6 +177,13 @@ export default (api: IApi) => {
         );
       }
     } catch {}
+
+    // FIXME: remove before 2.3.0
+    if ('live' in api.config) {
+      logger.warn(
+        '`live` config is deprecated and live demo is always enabled now, please remove it.',
+      );
+    }
   });
 
   // skip mfsu for client api, to avoid circular resolve in mfsu mode

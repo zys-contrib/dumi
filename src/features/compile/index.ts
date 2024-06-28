@@ -5,7 +5,8 @@ import type { IApi, IDumiTechStack } from '@/types';
 import { _setFSCacheDir } from '@/utils';
 import path from 'path';
 import { addAtomMeta, addExampleAssets } from '../assets';
-
+import { getLoadHook } from './makoHooks';
+export const techStacks: IDumiTechStack[] = [];
 export default (api: IApi) => {
   api.describe({ key: 'dumi:compile' });
 
@@ -38,14 +39,48 @@ export default (api: IApi) => {
     },
   });
 
+  api.onGenerateFiles({
+    // make sure called before `addRuntimePlugin` key
+    // why not use `before: 'tmpFiles'`?
+    // because @umijs/preset-umi/.../tmpFiles has two `onGenerateFiles` key
+    // and `before` only insert before the last one
+    stage: -Infinity,
+    async fn() {
+      techStacks.push(
+        ...(await api.applyPlugins({
+          key: 'registerTechStack',
+          type: api.ApplyPluginsType.add,
+        })),
+      );
+    },
+  });
+
+  // auto register runtime plugin for each tech stack
+  api.addRuntimePlugin(() =>
+    techStacks.reduce<string[]>((acc, techStack) => {
+      if (techStack.runtimeOpts?.pluginPath) {
+        acc.push(techStack.runtimeOpts.pluginPath);
+      }
+
+      return acc;
+    }, []),
+  );
+
   // configure loader to compile markdown
+  api.modifyConfig((memo) => {
+    memo.mfsu = false;
+    return memo;
+  });
   api.chainWebpack(async (memo) => {
     const babelInUmi = memo.module.rule('src').use('babel-loader').entries();
-    const techStacks: IDumiTechStack[] = await api.applyPlugins({
-      key: 'registerTechStack',
-      type: api.ApplyPluginsType.add,
-    });
+    if (!babelInUmi) return memo;
     const loaderPath = require.resolve('../../loaders/markdown');
+
+    // support require mjs packages(eg. element-plus/es)
+    memo.resolve.byDependency.set('commonjs', {
+      conditionNames: ['require', 'node', 'import'],
+    });
+
     const loaderBaseOpts: Partial<IMdLoaderOptions> = {
       techStacks,
       cwd: api.cwd,
@@ -57,25 +92,62 @@ export default (api: IApi) => {
       locales: api.config.locales,
       pkg: api.pkg,
     };
-
     memo.module
+      .rule('watch-parent')
+      .pre()
+      .resourceQuery(/watch=parent/)
+      .use('null-loader')
+      .loader(require.resolve('../../loaders/null'))
+      .end();
+    const mdRule = memo.module
       .rule('dumi-md')
       .type('javascript/auto')
-      .test(/\.md$/)
-      // get meta for each markdown file
-      .oneOf('md-meta')
-      .resourceQuery(/meta$/)
+      .test(/\.md$/);
+
+    // generate independent oneOf rules
+    ['frontmatter', 'text', 'demo-index'].forEach((type) => {
+      mdRule
+        .oneOf(`md-${type}`)
+        .resourceQuery(new RegExp(`${type}$`))
+        .use(`md-${type}-loader`)
+        .loader(loaderPath)
+        .options({
+          ...loaderBaseOpts,
+          mode: type,
+        });
+    });
+
+    // get demo metadata for each markdown file
+    mdRule
+      .oneOf('md-demo')
+      .resourceQuery(/demo$/)
       .use('babel-loader')
       .loader(babelInUmi.loader)
       .options(babelInUmi.options)
       .end()
-      .use('md-meta-loader')
+      .use('md-demo-loader')
+      .loader(loaderPath)
+      .options({
+        ...loaderBaseOpts,
+        mode: 'demo',
+      })
+      .end()
+      .end();
+
+    // get page component for each markdown file
+    mdRule
+      .oneOf('md')
+      .use('babel-loader')
+      .loader(babelInUmi.loader)
+      .options(babelInUmi.options)
+      .end()
+      .use('md-loader')
       .loader(loaderPath)
       .options(
         (api.isPluginEnable('assets') || api.isPluginEnable('exportStatic')
           ? {
               ...loaderBaseOpts,
-              mode: 'meta',
+              builtins: api.service.themeData.builtins,
               onResolveDemos(demos) {
                 const assets = demos.reduce<
                   Parameters<typeof addExampleAssets>[0]
@@ -90,30 +162,16 @@ export default (api: IApi) => {
             }
           : {
               ...loaderBaseOpts,
-              mode: 'meta',
+              builtins: api.service.themeData.builtins,
             }) as IMdLoaderOptions,
-      )
-      .end()
-      .end()
-      // get page component for each markdown file
-      .oneOf('md')
-      .use('babel-loader')
-      .loader(babelInUmi.loader)
-      .options(babelInUmi.options)
-      .end()
-      .use('md-loader')
-      .loader(loaderPath)
-      .options({
-        ...loaderBaseOpts,
-        builtins: api.service.themeData.builtins,
-      } as IMdLoaderOptions);
+      );
 
     // get meta for each page component
     memo.module
       .rule('dumi-page')
       .type('javascript/auto')
       .test(/\.(j|t)sx?$/)
-      .resourceQuery(/meta$/)
+      .resourceQuery(/frontmatter$/)
       .use('page-meta-loader')
       .loader(require.resolve('../../loaders/page'));
 
@@ -149,7 +207,21 @@ export default (api: IApi) => {
         },
       ]);
     }
-
     return memo;
+  });
+
+  api.modifyConfig({
+    before: 'mako',
+    fn: (memo) => {
+      if (memo.mako || memo.ssr?.builder === 'mako') {
+        memo.mako ??= {};
+        memo.mako.plugins = [
+          {
+            load: getLoadHook(api),
+          },
+        ];
+      }
+      return memo;
+    },
   });
 };
